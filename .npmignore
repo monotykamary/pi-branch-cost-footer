@@ -1,6 +1,8 @@
 tests/
+.github/
 tsconfig.json
 knip.json
 vitest.config.ts
+pnpm-lock.yaml
 *.log
 .DS_Store
