@@ -1,0 +1,47 @@
+{
+  "name": "pi-branch-cost-footer",
+  "version": "1.0.0",
+  "description": "pi footer extension that shows cumulative token usage and cost for the current session branch only, not the whole session.",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'",
+    "lint:dead": "knip --no-gitignore",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "extension",
+    "footer",
+    "cost",
+    "branch",
+    "session",
+    "tokens",
+    "usage"
+  ],
+  "author": "monotykamary",
+  "license": "MIT",
+  "devDependencies": {
+    "knip": "6.14.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.7"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monotykamary/pi-branch-cost-footer.git"
+  },
+  "homepage": "https://github.com/monotykamary/pi-branch-cost-footer#readme",
+  "bugs": {
+    "url": "https://github.com/monotykamary/pi-branch-cost-footer/issues"
+  },
+  "packageManager": "pnpm@11.6.0"
+}

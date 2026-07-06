@@ -1,0 +1,6 @@
+tests/
+tsconfig.json
+knip.json
+vitest.config.ts
+*.log
+.DS_Store
