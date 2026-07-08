@@ -11,7 +11,9 @@ type Entry = {
 	message: { role: "assistant"; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } } };
 };
 
-type Model = { id: string; provider: string; contextWindow: number };
+type Model = { id: string; provider: string; contextWindow: number; reasoning?: boolean };
+
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type FooterObj = {
 	render(width: number): string[];
@@ -28,6 +30,7 @@ interface MountOpts {
 	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null } | null;
 	statuses?: [string, string][];
 	usingOAuth?: boolean;
+	thinkingLevel?: ThinkingLevel;
 }
 
 // Mutable harness state, returned by reference so tests observe live changes
@@ -43,6 +46,7 @@ interface MountResult {
 	ctx: any;
 	command: { name: string; description: string; handler: (args: any, ctx: any) => Promise<void> | void };
 	state: HarnessState;
+	setThinkingLevel: (level: ThinkingLevel) => void;
 	dispose: () => void;
 }
 
@@ -57,6 +61,7 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 
 	const sessionStartHandlers: ((e: any, ctx: any) => void)[] = [];
 	let command: any = null;
+	let currentThinking: ThinkingLevel = opts.thinkingLevel ?? "off";
 	const pi: any = {
 		on: (ev: string, fn: any) => {
 			if (ev === "session_start") sessionStartHandlers.push(fn);
@@ -64,6 +69,7 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 		registerCommand: (name: string, def: any) => {
 			command = { name, ...def };
 		},
+		getThinkingLevel: () => currentThinking,
 	};
 	factory(pi);
 
@@ -117,7 +123,7 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 
 	for (const h of sessionStartHandlers) h({ type: "session_start" }, ctx);
 
-	return { footer, ctx, command, state, dispose: () => footer.dispose?.() };
+	return { footer, ctx, command, state, setThinkingLevel: (level: ThinkingLevel) => { currentThinking = level; }, dispose: () => footer.dispose?.() };
 }
 
 function assistant(
@@ -269,5 +275,57 @@ describe("pi-branch-cost-footer", () => {
 	it("appends (sub) to cost when the active model is an OAuth subscription", async () => {
 		const { footer } = await mount({ branch: [assistant({ total: 0.01 })], usingOAuth: true });
 		expect(footer.render(120)[1]).toContain("$0.010 (sub)");
+	});
+
+	const reasoningModel = {
+		id: "anthropic/claude-sonnet-4",
+		provider: "anthropic",
+		contextWindow: 200000,
+		reasoning: true,
+	};
+
+	it("appends • <level> to the model when reasoning is supported and thinking is on", async () => {
+		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "xhigh" });
+		expect(footer.render(140)[1]).toContain("anthropic/claude-sonnet-4 • xhigh");
+	});
+
+	it("appends • thinking off when reasoning is supported but thinking is off", async () => {
+		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "off" });
+		expect(footer.render(140)[1]).toContain("anthropic/claude-sonnet-4 • thinking off");
+	});
+
+	it("omits the thinking suffix when the model does not support reasoning", async () => {
+		const { footer } = await mount({
+			model: { ...reasoningModel, reasoning: false },
+			thinkingLevel: "xhigh",
+		});
+		const line = footer.render(140)[1];
+		expect(line).toContain("anthropic/claude-sonnet-4");
+		expect(line).not.toContain("• xhigh");
+		expect(line).not.toContain("thinking off");
+	});
+
+	it("combines the provider prefix with the thinking suffix", async () => {
+		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "high", providerCount: 2 });
+		expect(footer.render(140)[1]).toContain("(anthropic) anthropic/claude-sonnet-4 • high");
+	});
+
+	it("drops the provider prefix but keeps the thinking suffix when space is tight", async () => {
+		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "high", providerCount: 2 });
+		const line = footer.render(50)[1];
+		expect(line).toContain("• high");
+		expect(line).not.toContain("(anthropic)");
+		// Plain theme ⇒ string length == visible width.
+		expect(line.length).toBeLessThanOrEqual(50);
+	});
+
+	it("updates the thinking suffix dynamically as the level changes between renders", async () => {
+		const { footer, setThinkingLevel } = await mount({ model: reasoningModel, thinkingLevel: "low" });
+		expect(footer.render(140)[1]).toContain("• low");
+		setThinkingLevel("xhigh");
+		expect(footer.render(140)[1]).toContain("• xhigh");
+		expect(footer.render(140)[1]).not.toContain("• low");
+		setThinkingLevel("off");
+		expect(footer.render(140)[1]).toContain("• thinking off");
 	});
 });

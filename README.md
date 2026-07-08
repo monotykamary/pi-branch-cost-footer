@@ -20,7 +20,7 @@ This extension replaces that footer with one that sums **only the current branch
 
 ```
 ~/projects/my-app (feature/auth) • refactor-oauth
-↳ ↑12.4k ↓3.1k R48k W2.0k CH94.2% $0.0421 8.3%/200k          (anthropic) anthropic/claude-3-5-sonnet
+↳ ↑12.4k ↓3.1k R48k W2.0k CH94.2% $0.0421 8.3%/200k          (anthropic) anthropic/claude-sonnet-4 • xhigh
 ```
 
 The leading `↳` marks this as the branch-scoped footer, so you can always tell it apart from the default at a glance. Toggle it off with `/branch-cost` to compare against the whole-session total.
@@ -34,7 +34,7 @@ pi sessions are a **tree**, not a list. Every `/fork` and every `/tree` jump lea
 ```
 # /tree — jump from feature/auth to feature/payments
 ~/projects/my-app (feature/payments) • refactor-oauth
-↳ ↑5.1k ↓0.9k R22k W1.0k CH91.7% $0.0113 2.6%/200k          (anthropic) anthropic/claude-3-5-sonnet
+↳ ↑5.1k ↓0.9k R22k W1.0k CH91.7% $0.0113 2.6%/200k          (anthropic) anthropic/claude-sonnet-4 • xhigh
 ```
 
 Same session file — different branch, different cost.
@@ -46,6 +46,7 @@ Same session file — different branch, different cost.
 - **Live on branch switches** — re-renders when you navigate in `/tree`; subscribes to out-of-band git branch changes too.
 - **Context usage** — `ctx%/window` with the same warning/error color thresholds as the built-in footer; `?/window` while unknown (e.g. right after compaction).
 - **Multi-provider aware** — prefixes the model with `(provider)` when more than one provider is available, like the built-in footer.
+- **Thinking-level aware** — appends `• <level>` (e.g. `• xhigh`) to the model when it supports reasoning, and `• thinking off` when off. Read live from `pi.getThinkingLevel()`, so it updates as you cycle thinking effort.
 - **Subscription-aware** — appends `(sub)` to cost when the active model is an OAuth subscription.
 - **Toggle** — `/branch-cost` switches between this footer and pi's default, so you can compare side by side.
 - **Zero config** — on by default; nothing to set up.
@@ -62,7 +63,7 @@ Same session file — different branch, different cost.
 | `CH` | Latest cache-hit rate |
 | `$` | Cumulative cost on this branch (` (sub)` if on an OAuth subscription) |
 | `x%/window` | Context usage, colored when high; `?/window` while unknown |
-| `(provider) model` | Active model, prefixed with provider when several are available |
+| `(provider) model • thinking X` | Active model, prefixed with provider when several are available; `• <level>` (e.g. `• xhigh`) appended when the model supports reasoning — `• thinking off` when off |
 
 Segments are omitted when zero (matching the built-in footer), so a fresh branch with no assistant turns shows just `↳`, the context %, and the model.
 
@@ -110,10 +111,11 @@ Because `getBranch()` is root → leaf, **shared ancestors count toward every br
 
 ## Compatibility
 
-This is a near-perfect replica of the built-in footer with one deliberate difference (the scope) and two cosmetic omissions caused by what's reachable from the footer context:
+This is a near-perfect replica of the built-in footer with one deliberate difference (the scope) and one cosmetic omission caused by what's reachable from the footer context:
 
-- The model's `• thinking X` suffix is omitted — the active thinking level isn't exposed on `ctx` from inside `setFooter`.
 - The ` (auto)` tag on context % is omitted — the auto-compact setting isn't reachable from the footer context.
+
+The model's `• thinking X` suffix **is** included. The active thinking level isn't on `ctx`, but it is on the `ExtensionAPI` — `pi.getThinkingLevel()` — and the footer factory closes over `pi`. It's read fresh on every render, and the TUI already re-renders when the thinking effort changes (its editor-border update calls `requestRender`), so the suffix updates dynamically as you cycle levels — no extra event subscription needed.
 
 The branch-scoped cost and token totals are exact.
 

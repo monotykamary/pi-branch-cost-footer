@@ -136,16 +136,30 @@ export default function (pi: ExtensionAPI) {
 					const left = leftParts.join(" ");
 					const leftVis = visibleWidth(left);
 
-					// Line 2 right: model, prefixed with (provider) if multiple providers.
-					let modelStr = ctx.model?.id || "no-model";
-					if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
-						modelStr = `(${ctx.model.provider}) ${modelStr}`;
+					// Line 2 right: model with a thinking-level suffix when the model
+					// supports reasoning, prefixed with (provider) when several
+					// providers are available. The active thinking level lives on the
+					// ExtensionAPI (pi.getThinkingLevel()), not on ctx, so read it
+					// fresh per render. The TUI already re-renders on thinking/model
+					// changes (its editor-border update calls requestRender), so this
+					// keeps the suffix live without an extra event subscription.
+					const minPad = 2;
+					let rightSide = ctx.model?.id || "no-model";
+					if (ctx.model?.reasoning) {
+						const thinkingLevel = pi.getThinkingLevel() || "off";
+						rightSide =
+							thinkingLevel === "off"
+								? `${rightSide} • thinking off`
+								: `${rightSide} • ${thinkingLevel}`;
 					}
-					const right = theme.fg("dim", modelStr);
+					if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
+						const withProvider = `(${ctx.model.provider}) ${rightSide}`;
+						if (leftVis + minPad + visibleWidth(withProvider) <= width) rightSide = withProvider;
+					}
+					const right = theme.fg("dim", rightSide);
 					const rightVis = visibleWidth(right);
 
 					let line2: string;
-					const minPad = 2;
 					if (leftVis > width) {
 						line2 = truncateToWidth(left, width, "...");
 					} else if (leftVis + minPad + rightVis <= width) {
