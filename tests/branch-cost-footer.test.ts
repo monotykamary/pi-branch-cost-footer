@@ -13,7 +13,7 @@ type Entry = {
 
 type Model = { id: string; provider: string; contextWindow: number; reasoning?: boolean };
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 type FooterObj = {
 	render(width: number): string[];
