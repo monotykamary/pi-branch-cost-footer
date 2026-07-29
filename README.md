@@ -41,13 +41,13 @@ Same session file — different branch, different cost.
 
 ## Features
 
-- **Branch-scoped totals** — input, output, cache-read, cache-write, cache-hit rate, and `$` cost all sum from the active branch only.
+- **Branch-scoped totals** — input, output, cache-read, cache-write, cache-hit rate, and `$` cost all sum from the active branch only, including nested model usage from tools, compactions, and branch summaries.
 - **Faithful layout** — matches the built-in footer: `pwd (git-branch) • session-name` on line 1, the stats line on line 2, extension statuses on line 3 when present.
 - **Live on branch switches** — re-renders when you navigate in `/tree`; subscribes to out-of-band git branch changes too.
 - **Context usage** — `ctx%/window` with the same warning/error color thresholds as the built-in footer; `?/window` while unknown (e.g. right after compaction).
 - **Multi-provider aware** — prefixes the model with `(provider)` when more than one provider is available, like the built-in footer.
 - **Thinking-level aware** — appends `• <level>` (e.g. `• xhigh`) to the model when it supports reasoning, and `• thinking off` when off. Read live from `pi.getThinkingLevel()`, so it updates as you cycle thinking effort.
-- **Subscription-aware** — appends `(sub)` to cost when the active model is an OAuth subscription.
+- **Subscription-aware** — appends `(sub)` to cost when the active model is an OAuth subscription or Kimi Coding.
 - **Toggle** — `/branch-cost` switches between this footer and pi's default, so you can compare side by side.
 - **Zero config** — on by default; nothing to set up.
 
@@ -105,7 +105,7 @@ Once installed and pi is running in a trusted project, the branch-scoped footer 
 
 ### How branch scope is computed
 
-`ctx.sessionManager.getBranch()` returns the entries from the current leaf up to the root — the active path. The extension walks those entries and sums `usage.input`, `usage.output`, `usage.cacheRead`, `usage.cacheWrite`, and `usage.cost.total` from every assistant message. Entries on abandoned sibling branches are never counted.
+`ctx.sessionManager.getBranch()` returns the entries from the current leaf up to the root — the active path. The extension walks those entries and sums `usage.input`, `usage.output`, `usage.cacheRead`, `usage.cacheWrite`, and `usage.cost.total` from every assistant message. It also includes persisted nested usage from tool results, compactions, and branch summaries, matching pi 0.81+ accounting. Entries on abandoned sibling branches are never counted.
 
 Because `getBranch()` is root → leaf, **shared ancestors count toward every branch that descends from them**. If you branch off a turn that already cost `$5`, the new branch starts at `$5` — that's "cumulative on the branch," the same accounting `/session`-style tools usually intend.
 
@@ -127,7 +127,7 @@ pnpm test          # vitest
 pnpm lint:dead     # knip
 ```
 
-The extension is loaded by pi as TypeScript directly (no build step). Tests stub `@earendil-works/pi-tui` and drive the footer with a plain theme to exercise the layout and accounting logic. `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` are type-only imports, erased at runtime and provided by pi itself.
+The extension is loaded by pi as TypeScript directly (no build step). Tests stub `@earendil-works/pi-tui` and drive the footer with a plain theme to exercise the layout and accounting logic. The pi core packages are declared as peer dependencies and are provided by pi at runtime.
 
 ## License
 

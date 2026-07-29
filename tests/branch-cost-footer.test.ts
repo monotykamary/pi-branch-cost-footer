@@ -6,10 +6,12 @@ beforeEach(() => {
 	vi.resetModules();
 });
 
-type Entry = {
-	type: "message";
-	message: { role: "assistant"; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } } };
-};
+type UsageData = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } };
+
+type Entry =
+	| { type: "message"; message: { role: "assistant"; usage: UsageData } }
+	| { type: "message"; message: { role: "toolResult"; usage?: UsageData } }
+	| { type: "compaction" | "branch_summary"; usage?: UsageData };
 
 type Model = { id: string; provider: string; contextWindow: number; reasoning?: boolean };
 
@@ -126,22 +128,28 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 	return { footer, ctx, command, state, setThinkingLevel: (level: ThinkingLevel) => { currentThinking = level; }, dispose: () => footer.dispose?.() };
 }
 
-function assistant(
-	u: Partial<{ input: number; output: number; cacheRead: number; cacheWrite: number; total: number }> = {},
-): Entry {
+type UsageInput = Partial<{ input: number; output: number; cacheRead: number; cacheWrite: number; total: number }>;
+
+function usage(input: UsageInput = {}): UsageData {
 	return {
-		type: "message",
-		message: {
-			role: "assistant",
-			usage: {
-				input: u.input ?? 100,
-				output: u.output ?? 50,
-				cacheRead: u.cacheRead ?? 0,
-				cacheWrite: u.cacheWrite ?? 0,
-				cost: { total: u.total ?? 0.001 },
-			},
-		},
+		input: input.input ?? 100,
+		output: input.output ?? 50,
+		cacheRead: input.cacheRead ?? 0,
+		cacheWrite: input.cacheWrite ?? 0,
+		cost: { total: input.total ?? 0.001 },
 	};
+}
+
+function assistant(input: UsageInput = {}): Entry {
+	return { type: "message", message: { role: "assistant", usage: usage(input) } };
+}
+
+function toolResult(input: UsageInput = {}): Entry {
+	return { type: "message", message: { role: "toolResult", usage: usage(input) } };
+}
+
+function summary(type: "compaction" | "branch_summary", input: UsageInput = {}): Entry {
+	return { type, usage: usage(input) };
 }
 
 describe("pi-branch-cost-footer", () => {
@@ -167,6 +175,24 @@ describe("pi-branch-cost-footer", () => {
 		expect(lines[1]).toContain("W4.0k");
 		// Latest hit rate: cacheRead 9000 / (input 3000 + read 9000 + write 1000) = 69.2%
 		expect(lines[1]).toContain("CH69.2%");
+	});
+
+	it("includes nested tool, compaction, and branch-summary usage on the current branch", async () => {
+		const { footer } = await mount({
+			branch: [
+				assistant({ input: 1000, output: 200, total: 0.01 }),
+				toolResult({ input: 2000, output: 300, cacheRead: 4000, total: 0.02 }),
+				summary("compaction", { input: 3000, output: 400, total: 0.03 }),
+				summary("branch_summary", { input: 4000, output: 500, cacheWrite: 1000, total: 0.04 }),
+			],
+		});
+
+		const line = footer.render(120)[1];
+		expect(line).toContain("↑10k");
+		expect(line).toContain("↓1.4k");
+		expect(line).toContain("R4.0k");
+		expect(line).toContain("W1.0k");
+		expect(line).toContain("$0.100");
 	});
 
 	it("marks the branch-scoped footer with ↳ and shows git branch + session name on line 1", async () => {
@@ -275,6 +301,14 @@ describe("pi-branch-cost-footer", () => {
 	it("appends (sub) to cost when the active model is an OAuth subscription", async () => {
 		const { footer } = await mount({ branch: [assistant({ total: 0.01 })], usingOAuth: true });
 		expect(footer.render(120)[1]).toContain("$0.010 (sub)");
+	});
+
+	it("treats Kimi Coding as subscription-backed even without OAuth", async () => {
+		const { footer } = await mount({
+			branch: [],
+			model: { id: "kimi-k3", provider: "kimi-coding", contextWindow: 262144 },
+		});
+		expect(footer.render(120)[1]).toContain("$0.000 (sub)");
 	});
 
 	const reasoningModel = {
