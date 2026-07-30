@@ -1,234 +1,104 @@
 /**
  * pi-branch-cost-footer
  *
- * A pi footer extension that computes assistant, tool, compaction, and summary
- * token usage and cost from the CURRENT BRANCH only — getBranch() walks the
- * active leaf up to the root — instead of the whole session. The built-in footer
- * sums getEntries(), which includes abandoned sibling branches from /tree.
- *
- * The layout matches the built-in footer:
- *   line 1: pwd (git-branch) • session-name
- *   line 2: ↳ ↑in ↓out R cacheRead W cacheWrite CH hit% $cost   ctx%   model
- *   line 3: extension statuses (if any)
- *
- * A leading accent "↳" marks this as the branch-scoped footer so it's easy to
- * tell apart from the default. Switch branches in /tree and watch the cost
- * change; toggle off with /branch-cost to compare with the whole-session total.
- *
- * It is on by default. /branch-cost toggles between this footer and pi's
- * built-in footer.
- *
- * Install:
- *   pi install npm:pi-branch-cost-footer
- *   pi install https://github.com/monotykamary/pi-branch-cost-footer
- *
- * Or load directly:
- *   pi -e /path/to/pi-branch-cost-footer
- *
- * @see https://github.com/monotykamary/pi-branch-cost-footer
+ * Makes pi's built-in footer calculate cumulative usage from the current branch
+ * instead of the whole session. The built-in FooterComponent still owns all
+ * rendering, formatting, state, and future footer features.
  */
 
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+type FooterRender = typeof FooterComponent.prototype.render;
+
+type FooterInternals = {
+	session: {
+		sessionManager: {
+			getBranch(): unknown[];
+			getEntries(): unknown[];
+		};
+	};
+};
+
+type PatchState = {
+	enabled: boolean;
+	owner: symbol;
+	originalRender: FooterRender;
+};
+
+const patchKey = Symbol.for("pi-branch-cost-footer.patch");
+const patchRegistry = globalThis as typeof globalThis & {
+	[key: symbol]: PatchState | undefined;
+};
 
 export default function (pi: ExtensionAPI) {
+	const owner = Symbol("pi-branch-cost-footer.owner");
 	let enabled = true;
 
 	pi.on("session_start", (_event, ctx) => {
-		if (enabled && ctx.mode === "tui") installFooter(ctx);
+		if (ctx.mode === "tui") installPatch(owner);
+	});
+
+	pi.on("session_shutdown", () => {
+		uninstallPatch(owner);
 	});
 
 	pi.registerCommand("branch-cost", {
-		description: "Toggle branch-scoped cost footer (↳) vs default whole-session footer",
+		description: "Toggle branch-scoped vs whole-session footer usage",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("Branch-cost footer only applies in TUI mode", "info");
 				return;
 			}
+
 			enabled = !enabled;
-			if (enabled) {
-				installFooter(ctx);
-				ctx.ui.notify("Branch-scoped footer on (↳)", "info");
-			} else {
-				ctx.ui.setFooter(undefined);
-				ctx.ui.notify("Default footer restored", "info");
-			}
+			const patch = installPatch(owner);
+			patch.enabled = enabled;
+
+			// The built-in footer is already mounted. Re-setting it asks pi to render
+			// immediately, without introducing a custom footer implementation.
+			ctx.ui.setFooter(undefined);
+			ctx.ui.notify(enabled ? "Branch-scoped footer on" : "Whole-session footer restored", "info");
 		},
 	});
+}
 
-	function installFooter(ctx: ExtensionContext) {
-		ctx.ui.setFooter((tui, theme, footerData) => {
-			// Re-render when the git branch changes out-of-band (e.g. `git checkout`
-			// in another terminal). Session-branch switches via /tree already trigger
-			// a full UI re-render, which repaints the footer reading getBranch() fresh.
-			const unsub = footerData.onBranchChange(() => tui.requestRender());
-
-			return {
-				dispose: unsub,
-				invalidate() {},
-				render(width: number): string[] {
-					const sm = ctx.sessionManager;
-
-					// Branch-scoped totals: only entries on the current active branch.
-					const totals = createUsageTotals();
-					let latestHitRate: number | undefined;
-					for (const entry of sm.getBranch()) {
-						if (entry.type === "message" && entry.message.role === "assistant") {
-							const usage = (entry.message as AssistantMessage).usage;
-							addUsage(totals, usage);
-							const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
-							latestHitRate = prompt > 0 ? (usage.cacheRead / prompt) * 100 : latestHitRate;
-						} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-							addUsage(totals, entry.message.usage);
-						} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-							addUsage(totals, entry.usage);
-						}
-					}
-
-					// Line 1: pwd (git-branch) • session-name
-					let pwd = formatCwd(sm.getCwd(), process.env.HOME || process.env.USERPROFILE);
-					const gitBranch = footerData.getGitBranch();
-					if (gitBranch) pwd = `${pwd} (${gitBranch})`;
-					const sessionName = sm.getSessionName();
-					if (sessionName) pwd = `${pwd} • ${sessionName}`;
-					const line1 = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-
-					// Line 2 left: ↳ ↑in ↓out R W CH% $cost   ctx%
-					const statsParts: string[] = [];
-					if (totals.input) statsParts.push(`↑${formatTokens(totals.input)}`);
-					if (totals.output) statsParts.push(`↓${formatTokens(totals.output)}`);
-					if (totals.cacheRead) statsParts.push(`R${formatTokens(totals.cacheRead)}`);
-					if (totals.cacheWrite) statsParts.push(`W${formatTokens(totals.cacheWrite)}`);
-					if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && latestHitRate !== undefined) {
-						statsParts.push(`CH${latestHitRate.toFixed(1)}%`);
-					}
-					const usingSub = ctx.model
-						? ctx.model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(ctx.model)
-						: false;
-					if (totals.cost || usingSub) {
-						statsParts.push(`$${totals.cost.toFixed(3)}${usingSub ? " (sub)" : ""}`);
-					}
-					const statsText = statsParts.join(" ");
-
-					const cu = ctx.getContextUsage();
-					const window = cu?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-					const pct = cu?.percent;
-					const ctxDisplay =
-						pct === null || pct === undefined
-							? `?/${formatTokens(window)}`
-							: `${pct.toFixed(1)}%/${formatTokens(window)}`;
-					const ctxStr =
-						pct != null && pct > 90
-							? theme.fg("error", ctxDisplay)
-							: pct != null && pct > 70
-								? theme.fg("warning", ctxDisplay)
-								: theme.fg("dim", ctxDisplay);
-
-					// Each segment themed independently (no outer dim wrap) so ANSI
-					// resets don't clear neighboring colors.
-					const leftParts: string[] = [theme.fg("accent", "↳")];
-					if (statsText) leftParts.push(theme.fg("dim", statsText));
-					leftParts.push(ctxStr);
-					const left = leftParts.join(" ");
-					const leftVis = visibleWidth(left);
-
-					// Line 2 right: model with a thinking-level suffix when the model
-					// supports reasoning, prefixed with (provider) when several
-					// providers are available. The active thinking level lives on the
-					// ExtensionAPI (pi.getThinkingLevel()), not on ctx, so read it
-					// fresh per render. The TUI already re-renders on thinking/model
-					// changes (its editor-border update calls requestRender), so this
-					// keeps the suffix live without an extra event subscription.
-					const minPad = 2;
-					let rightSide = ctx.model?.id || "no-model";
-					if (ctx.model?.reasoning) {
-						const thinkingLevel = pi.getThinkingLevel() || "off";
-						rightSide =
-							thinkingLevel === "off"
-								? `${rightSide} • thinking off`
-								: `${rightSide} • ${thinkingLevel}`;
-					}
-					if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
-						const withProvider = `(${ctx.model.provider}) ${rightSide}`;
-						if (leftVis + minPad + visibleWidth(withProvider) <= width) rightSide = withProvider;
-					}
-					const right = theme.fg("dim", rightSide);
-					const rightVis = visibleWidth(right);
-
-					let line2: string;
-					if (leftVis > width) {
-						line2 = truncateToWidth(left, width, "...");
-					} else if (leftVis + minPad + rightVis <= width) {
-						line2 = left + " ".repeat(width - leftVis - rightVis) + right;
-					} else {
-						const availRight = width - leftVis - minPad;
-						if (availRight > 0) {
-							const right2 = truncateToWidth(right, availRight, "");
-							line2 = left + " ".repeat(Math.max(0, width - leftVis - visibleWidth(right2))) + right2;
-						} else {
-							line2 = left;
-						}
-					}
-
-					const lines = [line1, line2];
-
-					// Line 3: extension statuses, sorted by key.
-					const statuses = footerData.getExtensionStatuses();
-					if (statuses.size > 0) {
-						const statusLine = Array.from(statuses.entries())
-							.sort(([a], [b]) => a.localeCompare(b))
-							.map(([, t]) => sanitizeStatusText(t))
-							.join(" ");
-						lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
-					}
-
-					return lines;
-				},
-			};
-		});
+function installPatch(owner: symbol): PatchState {
+	const installed = patchRegistry[patchKey];
+	if (installed) {
+		installed.owner = owner;
+		return installed;
 	}
+
+	const originalRender = FooterComponent.prototype.render;
+	const patch: PatchState = { enabled: true, owner, originalRender };
+
+	FooterComponent.prototype.render = function renderBranchScoped(width: number): string[] {
+		const current = patchRegistry[patchKey];
+		if (!current?.enabled) return originalRender.call(this, width);
+
+		const footer = this as unknown as FooterInternals;
+		const sessionManager = footer.session.sessionManager;
+		const getEntries = sessionManager.getEntries;
+
+		// Core's footer reads getEntries() only while calculating cumulative usage.
+		// Swap that source for the synchronous duration of render(), then restore it
+		// so no other pi behavior becomes branch-scoped.
+		sessionManager.getEntries = sessionManager.getBranch.bind(sessionManager);
+		try {
+			return originalRender.call(this, width);
+		} finally {
+			sessionManager.getEntries = getEntries;
+		}
+	};
+
+	patchRegistry[patchKey] = patch;
+	return patch;
 }
 
-// Replicated from pi's built-in footer so this stays a faithful replacement.
+function uninstallPatch(owner: symbol): void {
+	const patch = patchRegistry[patchKey];
+	if (!patch || patch.owner !== owner) return;
 
-type UsageTotals = Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite"> & { cost: number };
-
-function createUsageTotals(): UsageTotals {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-}
-
-function addUsage(totals: UsageTotals, usage: Usage): void {
-	totals.input += usage.input;
-	totals.output += usage.output;
-	totals.cacheRead += usage.cacheRead;
-	totals.cacheWrite += usage.cacheWrite;
-	totals.cost += usage.cost.total;
-}
-
-function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-	if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-	return `${Math.round(count / 1_000_000)}M`;
-}
-
-function formatCwd(cwd: string, home: string | undefined): string {
-	if (!home) return cwd;
-	const resolvedCwd = resolve(cwd);
-	const resolvedHome = resolve(home);
-	const rel = relative(resolvedHome, resolvedCwd);
-	const inside =
-		rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-	if (!inside) return cwd;
-	return rel === "" ? "~" : `~${sep}${rel}`;
-}
-
-function sanitizeStatusText(text: string): string {
-	return text
-		.replace(/[\r\n\t]/g, " ")
-		.replace(/ +/g, " ")
-		.trim();
+	FooterComponent.prototype.render = patch.originalRender;
+	delete patchRegistry[patchKey];
 }

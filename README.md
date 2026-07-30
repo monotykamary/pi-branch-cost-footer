@@ -20,21 +20,21 @@ This extension replaces that footer with one that sums **only the current branch
 
 ```
 ~/projects/my-app (feature/auth) • refactor-oauth
-↳ ↑12.4k ↓3.1k R48k W2.0k CH94.2% $0.0421 8.3%/200k          (anthropic) anthropic/claude-sonnet-4 • xhigh
+↑12.4k ↓3.1k R48k W2.0k CH94.2% $0.042 8.3%/200k (auto)          (anthropic) anthropic/claude-sonnet-4 • xhigh
 ```
 
-The leading `↳` marks this as the branch-scoped footer, so you can always tell it apart from the default at a glance. Toggle it off with `/branch-cost` to compare against the whole-session total.
+Toggle it off with `/branch-cost` to compare against the whole-session total. The footer itself remains pi's built-in footer; only its cumulative-usage source changes.
 
 ## Why
 
 pi sessions are a **tree**, not a list. Every `/fork` and every `/tree` jump leaves the old path intact in the file. The built-in footer is honest about that — it reports the whole tree — but when you're heads-down on one branch, "how much has *this* line of work cost?" is the question you actually want answered.
 
-`pi-branch-cost-footer` answers it. It's a drop-in: zero config, on by default, and a faithful replica of the built-in footer — only the accounting scope changes.
+`pi-branch-cost-footer` answers it. It is a drop-in: zero config, on by default, and delegates rendering directly to pi's built-in footer. Only the accounting scope changes.
 
 ```
 # /tree — jump from feature/auth to feature/payments
 ~/projects/my-app (feature/payments) • refactor-oauth
-↳ ↑5.1k ↓0.9k R22k W1.0k CH91.7% $0.0113 2.6%/200k          (anthropic) anthropic/claude-sonnet-4 • xhigh
+↑5.1k ↓0.9k R22k W1.0k CH91.7% $0.011 2.6%/200k (auto)          (anthropic) anthropic/claude-sonnet-4 • xhigh
 ```
 
 Same session file — different branch, different cost.
@@ -42,7 +42,7 @@ Same session file — different branch, different cost.
 ## Features
 
 - **Branch-scoped totals** — input, output, cache-read, cache-write, cache-hit rate, and `$` cost all sum from the active branch only, including nested model usage from tools, compactions, and branch summaries.
-- **Faithful layout** — matches the built-in footer: `pwd (git-branch) • session-name` on line 1, the stats line on line 2, extension statuses on line 3 when present.
+- **Always-current layout** — pi's own `FooterComponent` performs the rendering, so new core footer features appear automatically.
 - **Live on branch switches** — re-renders when you navigate in `/tree`; subscribes to out-of-band git branch changes too.
 - **Context usage** — `ctx%/window` with the same warning/error color thresholds as the built-in footer; `?/window` while unknown (e.g. right after compaction).
 - **Multi-provider aware** — prefixes the model with `(provider)` when more than one provider is available, like the built-in footer.
@@ -55,7 +55,6 @@ Same session file — different branch, different cost.
 
 | Segment | Meaning |
 |---------|---------|
-| `↳` | Marks this as the branch-scoped footer (accent-colored) |
 | `↑` | Cumulative input tokens on this branch |
 | `↓` | Cumulative output tokens on this branch |
 | `R` | Cumulative cache-read tokens on this branch |
@@ -65,7 +64,7 @@ Same session file — different branch, different cost.
 | `x%/window` | Context usage, colored when high; `?/window` while unknown |
 | `(provider) model • thinking X` | Active model, prefixed with provider when several are available; `• <level>` (e.g. `• xhigh`) appended when the model supports reasoning — `• thinking off` when off |
 
-Segments are omitted when zero (matching the built-in footer), so a fresh branch with no assistant turns shows just `↳`, the context %, and the model.
+Segments are omitted when zero by pi core, so a fresh branch with no assistant turns shows the context percentage and model.
 
 ## Installation
 
@@ -111,13 +110,11 @@ Because `getBranch()` is root → leaf, **shared ancestors count toward every br
 
 ## Compatibility
 
-This is a near-perfect replica of the built-in footer with one deliberate difference (the scope) and one cosmetic omission caused by what's reachable from the footer context:
+The extension does not maintain a footer replica. It delegates every render to pi core's exported `FooterComponent`, temporarily changing that render's cumulative-usage source from `sessionManager.getEntries()` to `sessionManager.getBranch()`. The original method is restored in a `finally` block before rendering returns, so no other pi behavior becomes branch-scoped.
 
-- The ` (auto)` tag on context % is omitted — the auto-compact setting isn't reachable from the footer context.
+As a result, auto-compaction state, experimental indicators, model and thinking state, themes, formatting, truncation, and future footer additions all come directly from the installed pi version. The only output difference is the branch-scoped cumulative usage and cost.
 
-The model's `• thinking X` suffix **is** included. The active thinking level isn't on `ctx`, but it is on the `ExtensionAPI` — `pi.getThinkingLevel()` — and the footer factory closes over `pi`. It's read fresh on every render, and the TUI already re-renders when the thinking effort changes (its editor-border update calls `requestRender`), so the suffix updates dynamically as you cycle levels — no extra event subscription needed.
-
-The branch-scoped cost and token totals are exact.
+This integration intentionally depends on `FooterComponent` continuing to calculate cumulative usage through `sessionManager.getEntries()`. The integration tests run against the installed pi core package so an incompatible core change fails CI instead of silently drifting.
 
 ## Development
 

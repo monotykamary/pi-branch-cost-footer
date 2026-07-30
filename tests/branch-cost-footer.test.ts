@@ -1,136 +1,135 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { FooterComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Each test gets a fresh module so the extension's module-level `enabled` flag
-// (toggled by the /branch-cost command) doesn't leak between tests.
-beforeEach(() => {
-	vi.resetModules();
-});
+const patchKey = Symbol.for("pi-branch-cost-footer.patch");
 
 type UsageData = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } };
-
 type Entry =
 	| { type: "message"; message: { role: "assistant"; usage: UsageData } }
 	| { type: "message"; message: { role: "toolResult"; usage?: UsageData } }
 	| { type: "compaction" | "branch_summary"; usage?: UsageData };
 
 type Model = { id: string; provider: string; contextWindow: number; reasoning?: boolean };
-
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-type FooterObj = {
-	render(width: number): string[];
-	invalidate(): void;
-	dispose?: () => void;
-};
 
 interface MountOpts {
 	branch?: Entry[];
+	entries?: Entry[];
 	model?: Model | null;
 	sessionName?: string | null;
 	gitBranch?: string | null;
 	providerCount?: number;
-	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 	statuses?: [string, string][];
 	usingOAuth?: boolean;
 	thinkingLevel?: ThinkingLevel;
-}
-
-// Mutable harness state, returned by reference so tests observe live changes
-// (e.g. requestRender calls after firing onBranchChange).
-interface HarnessState {
-	requestRender: ReturnType<typeof vi.fn>;
-	onBranchChangeCb: (() => void) | null;
-	setFooterCalls: any[];
+	autoCompact?: boolean;
 }
 
 interface MountResult {
-	footer: FooterObj;
+	footer: FooterComponent;
 	ctx: any;
-	command: { name: string; description: string; handler: (args: any, ctx: any) => Promise<void> | void };
-	state: HarnessState;
-	setThinkingLevel: (level: ThinkingLevel) => void;
-	dispose: () => void;
+	command: { name: string; handler: (args: string, ctx: any) => Promise<void> };
+	setThinkingLevel(level: ThinkingLevel): void;
+	shutdown(): Promise<void>;
 }
 
-// A plain theme: returns text as-is so widths equal string lengths and substring
-// assertions are straightforward. The real extension colors each segment; the
-// stub mirrors the visible layout exactly.
-const theme = { fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t, bold: (t: string) => t };
+const mounted: MountResult[] = [];
+
+beforeAll(() => {
+	initTheme("dark", false);
+});
+
+beforeEach(() => {
+	const registry = globalThis as any;
+	const patch = registry[patchKey];
+	if (patch) {
+		FooterComponent.prototype.render = patch.originalRender;
+		delete registry[patchKey];
+	}
+	vi.resetModules();
+});
+
+afterEach(async () => {
+	await Promise.all(mounted.splice(0).map((item) => item.shutdown()));
+});
 
 async function mount(opts: MountOpts = {}): Promise<MountResult> {
-	const mod = await import("../index");
-	const factory = mod.default;
+	const { default: extension } = await import("../index");
+	const sessionStartHandlers: Array<(event: any, ctx: any) => void | Promise<void>> = [];
+	const sessionShutdownHandlers: Array<(event: any, ctx: any) => void | Promise<void>> = [];
+	let command: MountResult["command"] | undefined;
+	let thinkingLevel = opts.thinkingLevel ?? "off";
 
-	const sessionStartHandlers: ((e: any, ctx: any) => void)[] = [];
-	let command: any = null;
-	let currentThinking: ThinkingLevel = opts.thinkingLevel ?? "off";
 	const pi: any = {
-		on: (ev: string, fn: any) => {
-			if (ev === "session_start") sessionStartHandlers.push(fn);
+		on: (event: string, handler: any) => {
+			if (event === "session_start") sessionStartHandlers.push(handler);
+			if (event === "session_shutdown") sessionShutdownHandlers.push(handler);
 		},
-		registerCommand: (name: string, def: any) => {
-			command = { name, ...def };
+		registerCommand: (name: string, definition: any) => {
+			command = { name, ...definition };
 		},
-		getThinkingLevel: () => currentThinking,
+		getThinkingLevel: () => thinkingLevel,
 	};
-	factory(pi);
+	extension(pi);
 
-	const state: HarnessState = {
-		requestRender: vi.fn(),
-		onBranchChangeCb: null,
-		setFooterCalls: [],
+	const model =
+		opts.model === undefined
+			? { id: "anthropic/claude-sonnet-4", provider: "anthropic", contextWindow: 200000, reasoning: true }
+			: opts.model;
+	const branch = opts.branch ?? [];
+	const entries = opts.entries ?? branch;
+	const sessionManager = {
+		getEntries: () => entries,
+		getBranch: () => branch,
+		getCwd: () => "/home/user/projects/my-app",
+		getSessionName: () => opts.sessionName ?? null,
 	};
-	const tui = { requestRender: state.requestRender };
 	const footerData = {
 		getGitBranch: () => opts.gitBranch ?? null,
 		getExtensionStatuses: () => new Map(opts.statuses ?? []),
 		getAvailableProviderCount: () => opts.providerCount ?? 1,
-		onBranchChange: (cb: () => void) => {
-			state.onBranchChangeCb = cb;
-			return () => {
-				if (state.onBranchChangeCb === cb) state.onBranchChangeCb = null;
-			};
-		},
 	};
+	const session = {
+		get state() {
+			return { model, thinkingLevel };
+		},
+		sessionManager,
+		getContextUsage: () =>
+			opts.contextUsage ?? { tokens: 16600, contextWindow: model?.contextWindow ?? 0, percent: 8.3 },
+		modelRuntime: { isUsingOAuth: () => opts.usingOAuth ?? false },
+	};
+	const footer = new FooterComponent(session as any, footerData as any);
+	footer.setAutoCompactEnabled(opts.autoCompact ?? true);
 
+	const setFooter = vi.fn();
 	const ctx: any = {
 		mode: "tui",
-		model:
-			opts.model === undefined
-				? { id: "anthropic/claude-3-5-sonnet", provider: "anthropic", contextWindow: 200000 }
-				: opts.model,
+		model,
 		modelRegistry: { isUsingOAuth: () => opts.usingOAuth ?? false },
-		sessionManager: {
-			getBranch: () => opts.branch ?? [],
-			getCwd: () => "/home/user/projects/my-app",
-			getSessionName: () => opts.sessionName ?? null,
+		sessionManager,
+		getContextUsage: session.getContextUsage,
+		ui: { setFooter, notify: vi.fn() },
+	};
+	for (const handler of sessionStartHandlers) await handler({ type: "session_start" }, ctx);
+
+	const result: MountResult = {
+		footer,
+		ctx,
+		command: command!,
+		setThinkingLevel: (level) => {
+			thinkingLevel = level;
 		},
-		getContextUsage: () =>
-			opts.contextUsage === undefined ? { tokens: 16600, contextWindow: 200000, percent: 8.3 } : opts.contextUsage,
-		ui: {
-			setFooter: (factory: any) => {
-				state.setFooterCalls.push(factory);
-			},
-			notify: () => {},
+		shutdown: async () => {
+			for (const handler of sessionShutdownHandlers) await handler({ type: "session_shutdown" }, ctx);
 		},
 	};
-
-	// Drive session_start, capturing the factory pi receives and invoking it the
-	// way the TUI would (with stub tui/theme/footerData) to get the footer object.
-	let footer: FooterObj = { render: () => [], invalidate: () => {} };
-	ctx.ui.setFooter = (factory: any) => {
-		state.setFooterCalls.push(factory);
-		footer = factory(tui, theme, footerData);
-	};
-
-	for (const h of sessionStartHandlers) h({ type: "session_start" }, ctx);
-
-	return { footer, ctx, command, state, setThinkingLevel: (level: ThinkingLevel) => { currentThinking = level; }, dispose: () => footer.dispose?.() };
+	mounted.push(result);
+	return result;
 }
 
-type UsageInput = Partial<{ input: number; output: number; cacheRead: number; cacheWrite: number; total: number }>;
-
-function usage(input: UsageInput = {}): UsageData {
+function usage(input: Partial<{ input: number; output: number; cacheRead: number; cacheWrite: number; total: number }> = {}): UsageData {
 	return {
 		input: input.input ?? 100,
 		output: input.output ?? 50,
@@ -140,44 +139,33 @@ function usage(input: UsageInput = {}): UsageData {
 	};
 }
 
-function assistant(input: UsageInput = {}): Entry {
+function assistant(input: Parameters<typeof usage>[0] = {}): Entry {
 	return { type: "message", message: { role: "assistant", usage: usage(input) } };
 }
 
-function toolResult(input: UsageInput = {}): Entry {
+function toolResult(input: Parameters<typeof usage>[0] = {}): Entry {
 	return { type: "message", message: { role: "toolResult", usage: usage(input) } };
 }
 
-function summary(type: "compaction" | "branch_summary", input: UsageInput = {}): Entry {
+function summary(type: "compaction" | "branch_summary", input: Parameters<typeof usage>[0] = {}): Entry {
 	return { type, usage: usage(input) };
 }
 
 describe("pi-branch-cost-footer", () => {
-	it("sums token usage and cost from the current branch only", async () => {
-		const { footer } = await mount({
-			branch: [
-				assistant({ input: 1200, output: 800, cacheRead: 5000, cacheWrite: 3000, total: 0.012 }),
-				assistant({ input: 3000, output: 1200, cacheRead: 9000, cacheWrite: 1000, total: 0.045 }),
-			],
-			sessionName: "cost-test",
-			gitBranch: "feature/x",
-		});
+	it("uses the current branch as the built-in footer's cumulative usage source", async () => {
+		const shared = assistant({ input: 1200, output: 800, total: 0.012 });
+		const active = assistant({ input: 3000, output: 1200, cacheRead: 9000, cacheWrite: 1000, total: 0.045 });
+		const abandoned = assistant({ input: 50000, output: 20000, total: 4 });
+		const { footer } = await mount({ branch: [shared, active], entries: [shared, abandoned, active] });
 
-		const lines = footer.render(120);
-		expect(lines.length).toBeGreaterThanOrEqual(2);
-
-		// Branch-scoped cost: 0.012 + 0.045 = 0.057
-		expect(lines[1]).toContain("$0.057");
-		// Token totals: input 4200, output 2000, cacheRead 14000, cacheWrite 4000
-		expect(lines[1]).toContain("↑4.2k");
-		expect(lines[1]).toContain("↓2.0k");
-		expect(lines[1]).toContain("R14k");
-		expect(lines[1]).toContain("W4.0k");
-		// Latest hit rate: cacheRead 9000 / (input 3000 + read 9000 + write 1000) = 69.2%
-		expect(lines[1]).toContain("CH69.2%");
+		const line = footer.render(140)[1];
+		expect(line).toContain("↑4.2k");
+		expect(line).toContain("↓2.0k");
+		expect(line).toContain("$0.057");
+		expect(line).not.toContain("$4.057");
 	});
 
-	it("includes nested tool, compaction, and branch-summary usage on the current branch", async () => {
+	it("lets pi core account for tools, compactions, and branch summaries", async () => {
 		const { footer } = await mount({
 			branch: [
 				assistant({ input: 1000, output: 200, total: 0.01 }),
@@ -186,8 +174,7 @@ describe("pi-branch-cost-footer", () => {
 				summary("branch_summary", { input: 4000, output: 500, cacheWrite: 1000, total: 0.04 }),
 			],
 		});
-
-		const line = footer.render(120)[1];
+		const line = footer.render(140)[1];
 		expect(line).toContain("↑10k");
 		expect(line).toContain("↓1.4k");
 		expect(line).toContain("R4.0k");
@@ -195,171 +182,73 @@ describe("pi-branch-cost-footer", () => {
 		expect(line).toContain("$0.100");
 	});
 
-	it("marks the branch-scoped footer with ↳ and shows git branch + session name on line 1", async () => {
-		const { footer } = await mount({ sessionName: "cost-test", gitBranch: "feature/x" });
-		const lines = footer.render(120);
-		expect(lines[1]).toContain("↳");
+	it("inherits pi's auto-compaction, cwd, git branch, and session-name rendering", async () => {
+		const { footer } = await mount({ gitBranch: "feature/x", sessionName: "cost-test", autoCompact: true });
+		const lines = footer.render(140);
 		expect(lines[0]).toContain("feature/x");
 		expect(lines[0]).toContain("cost-test");
+		expect(lines[1]).toContain("8.3%/200k (auto)");
 	});
 
-	it("prefixes the model with (provider) when multiple providers are available", async () => {
-		const { footer } = await mount({ providerCount: 2 });
-		const lines = footer.render(140);
-		expect(lines[1]).toContain("(anthropic) anthropic/claude-3-5-sonnet");
+	it("inherits provider, subscription, and thinking-level rendering", async () => {
+		const { footer, setThinkingLevel } = await mount({
+			branch: [assistant({ total: 0.01 })],
+			providerCount: 2,
+			usingOAuth: true,
+			thinkingLevel: "high",
+		});
+		let line = footer.render(160)[1];
+		expect(line).toContain("$0.010 (sub)");
+		expect(line).toContain("(anthropic) anthropic/claude-sonnet-4 • high");
+		setThinkingLevel("off");
+		line = footer.render(160)[1];
+		expect(line).toContain("• thinking off");
 	});
 
-	it("omits the provider prefix when only one provider is available", async () => {
-		const { footer } = await mount({ providerCount: 1 });
-		const lines = footer.render(140);
-		expect(lines[1]).not.toContain("(anthropic)");
-		expect(lines[1]).toContain("anthropic/claude-3-5-sonnet");
+	it("inherits extension-status ordering and sanitization", async () => {
+		const { footer } = await mount({ statuses: [["zeta", "z!"], ["alpha", " a!\nnext "]] });
+		expect(footer.render(140)[2]).toBe("a! next z!");
 	});
 
-	it("hides the cost segment on an empty branch and never throws", async () => {
-		const { footer } = await mount({ branch: [], sessionName: null, gitBranch: null });
-		const lines = footer.render(80);
-		expect(lines.length).toBeGreaterThanOrEqual(2);
-		expect(lines[1]).not.toContain("$");
-		expect(lines[1]).not.toMatch(/↑|↓/);
-	});
-
-	it("renders context usage as percent/window, and ?/window when unknown", async () => {
-		const known = await mount({ contextUsage: { tokens: 180000, contextWindow: 200000, percent: 90.0 } });
-		expect(known.footer.render(120)[1]).toContain("90.0%/200k");
-
-		const unknown = await mount({ contextUsage: { tokens: null, contextWindow: 200000, percent: null } });
-		expect(unknown.footer.render(120)[1]).toContain("?/200k");
-	});
-
-	it("renders extension statuses on line 3, sorted by key", async () => {
-		const { footer } = await mount({ statuses: [["zeta", "z!"], ["alpha", "a!"]] });
-		const lines = footer.render(120);
-		expect(lines.length).toBe(3);
-		expect(lines[2]).toBe("a! z!");
-	});
-
-	it("never exceeds the terminal width, even when very narrow", async () => {
+	it("inherits core's width constraints", async () => {
 		const { footer } = await mount({
-			branch: [
-				assistant({ input: 1200, output: 800, cacheRead: 5000, cacheWrite: 3000, total: 0.012 }),
-				assistant({ input: 3000, output: 1200, cacheRead: 9000, cacheWrite: 1000, total: 0.045 }),
-			],
-			sessionName: "a-very-long-session-name-that-takes-space",
+			branch: [assistant({ input: 12000, output: 8000, cacheRead: 50000, cacheWrite: 3000, total: 0.12 })],
+			sessionName: "a-very-long-session-name",
 			gitBranch: "feature/a-really-long-branch-name",
 		});
-		for (const w of [120, 80, 60, 40, 20, 10, 5, 1]) {
-			const lines = footer.render(w);
-			for (const line of lines) {
-				// Plain theme ⇒ string length == visible width.
-				expect(line.length).toBeLessThanOrEqual(w);
-			}
+		for (const width of [120, 80, 40, 20, 5, 1]) {
+			for (const line of footer.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});
 
-	it("subscribes to git branch changes and disposes the subscription", async () => {
-		const { state, dispose } = await mount();
-		expect(state.onBranchChangeCb).not.toBeNull();
-		state.onBranchChangeCb!();
-		expect(state.requestRender).toHaveBeenCalledTimes(1);
+	it("restores whole-session accounting when toggled off", async () => {
+		const active = assistant({ total: 0.01 });
+		const abandoned = assistant({ total: 1 });
+		const { footer, command, ctx } = await mount({ branch: [active], entries: [active, abandoned] });
+		expect(footer.render(140)[1]).toContain("$0.010");
 
-		dispose();
-		// After dispose, the callback is cleared — firing it again is a no-op.
-		const before = state.requestRender.mock.calls.length;
-		state.onBranchChangeCb?.();
-		expect(state.requestRender.mock.calls.length).toBe(before);
-		expect(state.onBranchChangeCb).toBeNull();
+		await command.handler("", ctx);
+		expect(footer.render(140)[1]).toContain("$1.010");
+		expect(ctx.ui.setFooter).toHaveBeenCalledWith(undefined);
+
+		await command.handler("", ctx);
+		expect(footer.render(140)[1]).toContain("$0.010");
 	});
 
-	it("toggles off via /branch-cost (setFooter(undefined)) and back on", async () => {
-		const { ctx, command } = await mount();
-		// session_start already installed the footer once.
-		expect(command.name).toBe("branch-cost");
-
-		const offCalls: any[] = [];
-		ctx.ui.setFooter = (arg: any) => offCalls.push(arg);
-		await command.handler([], ctx);
-		expect(offCalls).toEqual([undefined]);
-
-		const onCalls: any[] = [];
-		ctx.ui.setFooter = (arg: any) => onCalls.push(arg);
-		await command.handler([], ctx);
-		expect(onCalls).toHaveLength(1);
-		expect(typeof onCalls[0]).toBe("function");
+	it("does not patch the footer outside TUI mode", async () => {
+		const { default: extension } = await import("../index");
+		const handlers: Array<(event: any, ctx: any) => void> = [];
+		extension({ on: (event: string, handler: any) => event === "session_start" && handlers.push(handler), registerCommand: () => {} } as any);
+		const before = FooterComponent.prototype.render;
+		handlers[0]({ type: "session_start" }, { mode: "json" });
+		expect(FooterComponent.prototype.render).toBe(before);
 	});
 
-	it("does not install the footer outside TUI mode", async () => {
-		const mod = await import("../index");
-		const factory = mod.default;
-		const handlers: ((e: any, ctx: any) => void)[] = [];
-		factory({ on: (_ev: string, fn: any) => handlers.push(fn), registerCommand: () => {} } as any);
-		const setFooter = vi.fn();
-		await handlers[0]({ type: "session_start" }, { mode: "json", ui: { setFooter } } as any);
-		expect(setFooter).not.toHaveBeenCalled();
-	});
-
-	it("appends (sub) to cost when the active model is an OAuth subscription", async () => {
-		const { footer } = await mount({ branch: [assistant({ total: 0.01 })], usingOAuth: true });
-		expect(footer.render(120)[1]).toContain("$0.010 (sub)");
-	});
-
-	it("treats Kimi Coding as subscription-backed even without OAuth", async () => {
-		const { footer } = await mount({
-			branch: [],
-			model: { id: "kimi-k3", provider: "kimi-coding", contextWindow: 262144 },
-		});
-		expect(footer.render(120)[1]).toContain("$0.000 (sub)");
-	});
-
-	const reasoningModel = {
-		id: "anthropic/claude-sonnet-4",
-		provider: "anthropic",
-		contextWindow: 200000,
-		reasoning: true,
-	};
-
-	it("appends • <level> to the model when reasoning is supported and thinking is on", async () => {
-		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "xhigh" });
-		expect(footer.render(140)[1]).toContain("anthropic/claude-sonnet-4 • xhigh");
-	});
-
-	it("appends • thinking off when reasoning is supported but thinking is off", async () => {
-		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "off" });
-		expect(footer.render(140)[1]).toContain("anthropic/claude-sonnet-4 • thinking off");
-	});
-
-	it("omits the thinking suffix when the model does not support reasoning", async () => {
-		const { footer } = await mount({
-			model: { ...reasoningModel, reasoning: false },
-			thinkingLevel: "xhigh",
-		});
-		const line = footer.render(140)[1];
-		expect(line).toContain("anthropic/claude-sonnet-4");
-		expect(line).not.toContain("• xhigh");
-		expect(line).not.toContain("thinking off");
-	});
-
-	it("combines the provider prefix with the thinking suffix", async () => {
-		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "high", providerCount: 2 });
-		expect(footer.render(140)[1]).toContain("(anthropic) anthropic/claude-sonnet-4 • high");
-	});
-
-	it("drops the provider prefix but keeps the thinking suffix when space is tight", async () => {
-		const { footer } = await mount({ model: reasoningModel, thinkingLevel: "high", providerCount: 2 });
-		const line = footer.render(50)[1];
-		expect(line).toContain("• high");
-		expect(line).not.toContain("(anthropic)");
-		// Plain theme ⇒ string length == visible width.
-		expect(line.length).toBeLessThanOrEqual(50);
-	});
-
-	it("updates the thinking suffix dynamically as the level changes between renders", async () => {
-		const { footer, setThinkingLevel } = await mount({ model: reasoningModel, thinkingLevel: "low" });
-		expect(footer.render(140)[1]).toContain("• low");
-		setThinkingLevel("xhigh");
-		expect(footer.render(140)[1]).toContain("• xhigh");
-		expect(footer.render(140)[1]).not.toContain("• low");
-		setThinkingLevel("off");
-		expect(footer.render(140)[1]).toContain("• thinking off");
+	it("restores FooterComponent on session shutdown", async () => {
+		const before = FooterComponent.prototype.render;
+		const result = await mount();
+		expect(FooterComponent.prototype.render).not.toBe(before);
+		await result.shutdown();
+		expect(FooterComponent.prototype.render).toBe(before);
 	});
 });
