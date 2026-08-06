@@ -1,6 +1,6 @@
 {
   "name": "pi-branch-cost-footer",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "pi footer extension that shows cumulative token usage and cost for the current session branch only, not the whole session.",
   "type": "module",
   "main": "index.ts",
@@ -35,8 +35,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0",
-    "@earendil-works/pi-tui": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.84.0",
+    "@earendil-works/pi-tui": "0.84.0",
     "@types/node": "24.12.4",
     "knip": "6.14.1",
     "typescript": "6.0.3",

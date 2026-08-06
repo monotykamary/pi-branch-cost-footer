@@ -98,7 +98,10 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 		sessionManager,
 		getContextUsage: () =>
 			opts.contextUsage ?? { tokens: 16600, contextWindow: model?.contextWindow ?? 0, percent: 8.3 },
-		modelRuntime: { isUsingOAuth: () => opts.usingOAuth ?? false },
+		modelRuntime: {
+			isUsingOAuth: () => opts.usingOAuth ?? false,
+			isUsingSubscription: () => opts.usingOAuth ?? false,
+		},
 	};
 	const footer = new FooterComponent(session as any, footerData as any);
 	footer.setAutoCompactEnabled(opts.autoCompact ?? true);
