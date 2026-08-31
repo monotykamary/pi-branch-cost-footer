@@ -54,6 +54,5 @@
   "homepage": "https://github.com/monotykamary/pi-branch-cost-footer#readme",
   "bugs": {
     "url": "https://github.com/monotykamary/pi-branch-cost-footer/issues"
-  },
-  "packageManager": "pnpm@11.20.0"
+  }
 }
