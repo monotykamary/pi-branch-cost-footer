@@ -104,7 +104,7 @@ Once installed and pi is running in a trusted project, the branch-scoped footer 
 
 ### How branch scope is computed
 
-`ctx.sessionManager.getBranch()` returns the entries from the current leaf up to the root — the active path. The extension walks those entries and sums `usage.input`, `usage.output`, `usage.cacheRead`, `usage.cacheWrite`, and `usage.cost.total` from every assistant message. It also includes persisted nested usage from tool results, compactions, and branch summaries, matching pi 0.81+ accounting. Entries on abandoned sibling branches are never counted.
+`ctx.sessionManager.getBranch()` returns the entries from the current leaf up to the root — the active path. The extension walks those entries and sums `usage.input`, `usage.output`, `usage.cacheRead`, `usage.cacheWrite`, and `usage.cost.total` from every assistant message. It also includes persisted nested usage from tool results, compactions, branch summaries, and standalone usage entries, matching Pi 0.99 accounting. Entries on abandoned sibling branches are never counted.
 
 Because `getBranch()` is root → leaf, **shared ancestors count toward every branch that descends from them**. If you branch off a turn that already cost `$5`, the new branch starts at `$5` — that's "cumulative on the branch," the same accounting `/session`-style tools usually intend.
 
@@ -129,3 +129,9 @@ The extension is loaded by pi as TypeScript directly (no build step). Tests stub
 ## License
 
 MIT
+
+## Pi 0.99 compatibility (1.3.10)
+
+Keeps separate branch and native whole-session usage caches introduced by Pi 0.99. Toggles, repeated renders and shutdown cannot leak branch totals into native accounting; rendering failures restore the original accessor and cache.
+
+Tested with Pi 0.99.0. Host-provided Pi packages are wildcard peers, not bundled dependencies; development uses exact 0.99.0 versions.

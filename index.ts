@@ -11,6 +11,7 @@ import { FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-ag
 type FooterRender = typeof FooterComponent.prototype.render;
 
 type FooterInternals = {
+	sessionStats?: unknown;
 	session: {
 		sessionManager: {
 			getBranch(): unknown[];
@@ -71,6 +72,9 @@ function installPatch(owner: symbol): PatchState {
 
 	const originalRender = FooterComponent.prototype.render;
 	const patch: PatchState = { enabled: true, owner, originalRender };
+	// Pi 0.99 caches totals by session/leaf/count/model. Keep separate caches
+	// for the branch and native whole-session views, including across toggles.
+	const branchStats = new WeakMap<FooterComponent, unknown>();
 
 	FooterComponent.prototype.render = function renderBranchScoped(width: number): string[] {
 		const current = patchRegistry[patchKey];
@@ -79,6 +83,8 @@ function installPatch(owner: symbol): PatchState {
 		const footer = this as unknown as FooterInternals;
 		const sessionManager = footer.session.sessionManager;
 		const getEntries = sessionManager.getEntries;
+		const wholeSessionStats = footer.sessionStats;
+		footer.sessionStats = branchStats.get(this);
 
 		// Core's footer reads getEntries() only while calculating cumulative usage.
 		// Swap that source for the synchronous duration of render(), then restore it
@@ -88,6 +94,8 @@ function installPatch(owner: symbol): PatchState {
 			return originalRender.call(this, width);
 		} finally {
 			sessionManager.getEntries = getEntries;
+			branchStats.set(this, footer.sessionStats);
+			footer.sessionStats = wholeSessionStats;
 		}
 	};
 

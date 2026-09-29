@@ -82,6 +82,9 @@ async function mount(opts: MountOpts = {}): Promise<MountResult> {
 	const entries = opts.entries ?? branch;
 	const sessionManager = {
 		getEntries: () => entries,
+		getEntryCount: () => entries.length,
+		getSessionId: () => "test-session",
+		getLeafId: () => "active-leaf",
 		getBranch: () => branch,
 		getCwd: () => "/home/user/projects/my-app",
 		getSessionName: () => opts.sessionName ?? null,
@@ -155,6 +158,27 @@ function summary(type: "compaction" | "branch_summary", input: Parameters<typeof
 }
 
 describe("pi-branch-cost-footer", () => {
+	it("keeps Pi 0.99 caches separate, reuses branch totals and restores native state on shutdown", async () => {
+		const active = assistant({ total: 0.01 });
+		const result = await mount({ branch: [active], entries: [active, assistant({ total: 1 })] });
+		const getBranch = vi.spyOn(result.ctx.sessionManager, "getBranch");
+		expect(result.footer.render(140)[1]).toContain("$0.010");
+		result.footer.render(40);
+		expect(getBranch).toHaveBeenCalledOnce();
+		const entries = result.ctx.sessionManager.getEntries;
+		await result.shutdown();
+		expect(result.footer.render(140)[1]).toContain("$1.010");
+		expect(result.ctx.sessionManager.getEntries).toBe(entries);
+	});
+	it("restores accessors and native cache even if rendering throws", async () => {
+		const result = await mount();
+		const entries = result.ctx.sessionManager.getEntries;
+		const nativeStats = (result.footer as any).sessionStats;
+		result.ctx.sessionManager.getBranch = () => { throw new Error("broken branch"); };
+		expect(() => result.footer.render(80)).toThrow("broken branch");
+		expect(result.ctx.sessionManager.getEntries).toBe(entries);
+		expect((result.footer as any).sessionStats).toBe(nativeStats);
+	});
 	it("uses the current branch as the built-in footer's cumulative usage source", async () => {
 		const shared = assistant({ input: 1200, output: 800, total: 0.012 });
 		const active = assistant({ input: 3000, output: 1200, cacheRead: 9000, cacheWrite: 1000, total: 0.045 });
