@@ -158,7 +158,7 @@ function summary(type: "compaction" | "branch_summary", input: Parameters<typeof
 }
 
 describe("pi-branch-cost-footer", () => {
-	it("keeps Pi 0.99 caches separate, reuses branch totals and restores native state on shutdown", async () => {
+	it("keeps Pi 1.0 caches separate, reuses branch totals and restores native state on shutdown", async () => {
 		const active = assistant({ total: 0.01 });
 		const result = await mount({ branch: [active], entries: [active, assistant({ total: 1 })] });
 		const getBranch = vi.spyOn(result.ctx.sessionManager, "getBranch");

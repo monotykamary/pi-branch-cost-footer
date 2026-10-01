@@ -130,6 +130,13 @@ The extension is loaded by pi as TypeScript directly (no build step). Tests stub
 
 MIT
 
+## Pi 1.0 compatibility (1.3.11)
+
+Tested against Pi **1.0.0** with exact SDK development pins and wildcard host peers.
+Native footer rendering retains separate branch/session caches and restores its prototype on shutdown.
+
+Run `bun run test:host` for the offline real-host regression. Set `PI1_HOST_PACKAGE` to an installed Pi package directory and `PI1_HOST_ENTRY=bundle` to test its bundled CLI runtime.
+
 ## Pi 0.99 compatibility (1.3.10)
 
 Keeps separate branch and native whole-session usage caches introduced by Pi 0.99. Toggles, repeated renders and shutdown cannot leak branch totals into native accounting; rendering failures restore the original accessor and cache.

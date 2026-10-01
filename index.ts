@@ -72,7 +72,7 @@ function installPatch(owner: symbol): PatchState {
 
 	const originalRender = FooterComponent.prototype.render;
 	const patch: PatchState = { enabled: true, owner, originalRender };
-	// Pi 0.99 caches totals by session/leaf/count/model. Keep separate caches
+	// Pi 1.0 caches totals by session/leaf/count/model. Keep separate caches
 	// for the branch and native whole-session views, including across toggles.
 	const branchStats = new WeakMap<FooterComponent, unknown>();
 
