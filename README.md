@@ -132,7 +132,7 @@ MIT
 
 ## Pi 1.0 compatibility (1.3.11)
 
-Tested against Pi **1.0.0** with exact SDK development pins and wildcard host peers.
+Tested against Pi **1.1.0** with exact SDK development pins and wildcard host peers.
 Native footer rendering retains separate branch/session caches and restores its prototype on shutdown.
 
 Run `bun run test:host` for the offline real-host regression. Set `PI1_HOST_PACKAGE` to an installed Pi package directory and `PI1_HOST_ENTRY=bundle` to test its bundled CLI runtime.
